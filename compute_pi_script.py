@@ -30,6 +30,9 @@ def print_output(pi_value, num_digits, elapsed_time):
     print(f"Number of digits in the output: {len(str(pi_value).split('.')[1])}")
     print(f"Time taken to compute {num_digits} digits of Pi: {elapsed_time:.4f} seconds")
 
+    # Write the Pi value to a file
+    with open("pi.txt", "w") as f:
+        f.write(str(pi_value))
 
 @lru_cache(maxsize=None)
 def optimized_chudnovsky_bs_gmpy2(a, b):
