@@ -11,12 +11,10 @@ def main(num_digits):
     """Main function to compute Pi."""
     mp.dps = num_digits  # Set decimal places in mpmath
     num_threads = get_optimal_thread_count()
-    chunk_size = num_digits // num_threads
+    num_terms = num_digits // 14  # Approximate terms needed
 
     start_time = time.time()
-    pi_value = compute_pi_multiprocessing(
-        num_digits, num_threads, chunk_size
-    )
+    pi_value = compute_pi_multiprocessing(num_terms, num_threads)
     end_time = time.time()
 
     elapsed_time = end_time - start_time
@@ -24,14 +22,35 @@ def main(num_digits):
 
 
 def print_output(pi_value, num_digits, elapsed_time):
-    """Print the computed Pi value and timing details."""
+    """
+    Print the computed Pi value and timing details, and write the Pi value to a file in y-cruncher format.
+    """
     print(f"Final output (first 30 digits): {pi_value[:30]}")
     print(f"Number of digits in the output: {len(pi_value.split('.')[1])}")
     print(f"Time taken to compute {num_digits} digits of Pi: {elapsed_time:.4f} seconds")
 
-    # Write the Pi value to a file
+    # Write the Pi value to a file in y-cruncher format
     with open("pi.txt", "w") as f:
-        f.write(pi_value)
+        # Write metadata
+        f.write("PiCalculator Validation File (y-cruncher compatible)\n")
+        f.write("===========================\n")
+        f.write(f"Algorithm: Chudnovsky\n")
+        f.write(f"Decimal Digits: {num_digits}\n")
+        f.write(f"Hex Digits: {num_digits * 4 // 10}\n")
+        f.write(f"Total Terms: {num_digits // 14}\n")
+        f.write("\n")
+        f.write("Begin Digits:\n")
+
+        # Write the digits
+        pi_digits = pi_value.split('.')[1]  # Exclude the '3.' at the beginning
+        for i in range(0, len(pi_digits), 100):  # 100 digits per line
+            line = pi_digits[i:i + 100]
+            for j in range(0, len(line), 10):  # 10 digits per block
+                f.write(line[j:j + 10] + ' ')
+            f.write("\n")
+
+        f.write("\nEnd Digits")
+
 
 @lru_cache(maxsize=None)
 def optimized_chudnovsky_bs(a, b):
@@ -83,16 +102,16 @@ def compute_chunks_for_process(chunks):
         qk_agg *= qk_chunk
     return pk_agg, ak_agg, qk_agg
 
-def compute_pi_multiprocessing(num_terms, num_threads, chunk_size):
+def compute_pi_multiprocessing(num_terms, num_threads):
     """Compute Pi using multiprocessing."""
-    all_chunks = [
-        (start, min(start + chunk_size, num_terms)) for start in range(0, num_terms, chunk_size)
-    ]
-
-    chunks_per_process = [all_chunks[i::num_threads] for i in range(num_threads)]
+    # Compute chunk sizes with smaller sizes for later terms
+    total_chunks = sum(range(1, num_threads + 1))
+    individual_chunks = [i * num_terms // total_chunks for i in range(1, num_threads + 1)]
+    chunk_borders = [0] + [sum(individual_chunks[:i+1]) for i in range(len(individual_chunks))]
+    all_chunks = [(chunk_borders[i], chunk_borders[i+1]) for i in range(len(chunk_borders) - 1)]
 
     with Pool(processes=num_threads) as pool:
-        results = pool.map(compute_chunks_for_process, chunks_per_process)
+        results = pool.map(compute_chunks_for_process, [all_chunks[i:i+1] for i in range(len(all_chunks))])
 
     pk_final, ak_final, qk_final = aggregate_thread_results(results)
 
@@ -102,6 +121,7 @@ def compute_pi_multiprocessing(num_terms, num_threads, chunk_size):
     pi = chudnovsky_scaling_factor / ak_over_qk
 
     return pi
+
 
 if __name__ == "__main__":
     main()
