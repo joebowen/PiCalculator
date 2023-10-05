@@ -1,9 +1,11 @@
 import click
-from functools import lru_cache
 import os
 import time
+import pickle
 from multiprocessing import Pool
-from mpmath import mp
+from mpmath import mp, mpf
+from functools import lru_cache
+import psutil
 
 @click.command()
 @click.option('--num-digits', default=1000, help='Number of digits of Pi to compute.')
@@ -14,7 +16,10 @@ def main(num_digits):
     num_terms = num_digits // 14  # Approximate terms needed
 
     start_time = time.time()
-    pi_value = compute_pi_multiprocessing(num_terms, num_threads)
+
+    compute_pi_multiprocessing(num_terms, num_threads)
+    pi_value = aggregate_chunks(num_terms)
+
     end_time = time.time()
 
     elapsed_time = end_time - start_time
@@ -51,6 +56,14 @@ def print_output(pi_value, num_digits, elapsed_time):
 
         f.write("\nEnd Digits")
 
+def get_optimal_thread_count():
+    """Get the optimal thread count based on CPU cores."""
+    return max(1, os.cpu_count())
+
+def get_available_memory():
+    """Get available memory in GB."""
+    svmem = psutil.virtual_memory()
+    return svmem.available / (1024. ** 3)
 
 @lru_cache(maxsize=None)
 def optimized_chudnovsky_bs(a, b):
@@ -79,10 +92,6 @@ def compute_internal_node(p1, a1, q1, p2, a2, q2):
     qk = q1 * q2
     return pk, ak, qk
 
-def get_optimal_thread_count():
-    """Get the optimal thread count based on CPU cores."""
-    return max(1, os.cpu_count())
-
 def aggregate_thread_results(results):
     """Aggregate results from all threads."""
     p_agg, a_agg, q_agg = mp.mpf(1), mp.mpf(0), mp.mpf(1)
@@ -92,36 +101,41 @@ def aggregate_thread_results(results):
         q_agg *= q
     return p_agg, a_agg, q_agg
 
-def compute_chunks_for_process(chunks):
-    """Compute chunks of terms for a single process."""
+def compute_chunks_for_process(chunks, file_index):
+    """Compute chunks of terms for a single process and write them to a file."""
     pk_agg, ak_agg, qk_agg = mp.mpf(1), mp.mpf(0), mp.mpf(1)
     for start_term, end_term in chunks:
         pk_chunk, ak_chunk, qk_chunk = optimized_chudnovsky_bs(start_term, end_term)
         pk_agg *= pk_chunk
         ak_agg = ak_agg * qk_chunk + ak_chunk * pk_agg
         qk_agg *= qk_chunk
-    return pk_agg, ak_agg, qk_agg
+
+    ak_over_qk_chunk = ak_agg / qk_agg
+
+    os.makedirs('chunks', exist_ok=True)
+
+    with open(f"chunks/pi_chunk_{file_index}.pkl", "wb") as f:
+        pickle.dump(ak_over_qk_chunk, f)
+
+def aggregate_chunks(num_terms):
+    """Aggregate chunks from multiple files to compute Pi."""
+    ak_over_qk_total = mp.mpf(0)  # mp.mpf for intermediate sum
+    for i in range(num_terms):
+        filename = f"chunks/pi_chunk_{i}.pkl"
+        with open(filename, "rb") as f:
+            ak_over_qk_chunk = pickle.load(f)
+            ak_over_qk_total += ak_over_qk_chunk
+        os.remove(filename)  # Delete the chunk file
+
+    chudnovsky_scaling_factor = 426880 * mp.sqrt(10005)
+    pi_value = chudnovsky_scaling_factor / ak_over_qk_total
+    return pi_value
 
 def compute_pi_multiprocessing(num_terms, num_threads):
     """Compute Pi using multiprocessing."""
-    # Compute chunk sizes with smaller sizes for later terms
-    total_chunks = sum(range(1, num_threads + 1))
-    individual_chunks = [i * num_terms // total_chunks for i in range(1, num_threads + 1)]
-    chunk_borders = [0] + [sum(individual_chunks[:i+1]) for i in range(len(individual_chunks))]
-    all_chunks = [(chunk_borders[i], chunk_borders[i+1]) for i in range(len(chunk_borders) - 1)]
-
+    all_chunks = [(start, start + 1) for start in range(0, num_terms)]
     with Pool(processes=num_threads) as pool:
-        results = pool.map(compute_chunks_for_process, [all_chunks[i:i+1] for i in range(len(all_chunks))])
-
-    pk_final, ak_final, qk_final = aggregate_thread_results(results)
-
-    ak_over_qk = ak_final / qk_final
-
-    chudnovsky_scaling_factor = 426880 * mp.sqrt(10005)
-    pi = chudnovsky_scaling_factor / ak_over_qk
-
-    return pi
-
+        pool.starmap(compute_chunks_for_process, [(all_chunks[i:i+1], i) for i in range(len(all_chunks))])
 
 if __name__ == "__main__":
     main()
